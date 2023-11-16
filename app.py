@@ -2,16 +2,8 @@ import pytesseract
 from pdf2image import convert_from_path
 import tempfile
 import streamlit as st
-import logging
 from haystack.nodes import FARMReader
 from PyPDF2 import PdfReader
-
-logging.basicConfig(format="%(levelname)s - %(name)s -  %(message)s", level=logging.WARNING)
-logging.getLogger("haystack").setLevel(logging.INFO)
-
-if 'my_model' not in st.session_state:
-    st.session_state.my_model = FARMReader(model_name_or_path="deepset/roberta-base-squad2")
-my_model = st.session_state.my_model
 
 st.set_page_config(
     page_title="Question Answering System",
@@ -31,13 +23,18 @@ hide_streamlit_style = """
             """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
+@st.cache_data
+def loading_model():
+    return FARMReader(model_name_or_path="deepset/roberta-base-squad2")
+
+my_model = loading_model()
 
 st.title('Question Answering System')
 
 uploaded_files = st.file_uploader("Choose PDF files", type=["pdf"], accept_multiple_files=True)
 
-texts = []
-for uploaded_file in uploaded_files:
+@st.cache_data(show_spinner=False)
+def extract_text_from_pdf(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
@@ -53,16 +50,23 @@ for uploaded_file in uploaded_files:
         images = convert_from_path(tmp_path)
         for image in images:
             text += pytesseract.image_to_string(image)
-    texts.append(text)
+    return text
+
+texts = [extract_text_from_pdf(uploaded_file) for uploaded_file in uploaded_files]
 
 st.session_state.texts = texts
 
 num_results = st.slider("Number of results to display", value=10, min_value=5, max_value=30, step=5)
 
 question = st.text_input('Enter the Question')
+
+@st.cache_data(show_spinner=False)
+def get_answers(question, texts, num_results):
+    return my_model.predict_on_texts(question, texts, num_results)
+
 if question:
-    with st.spinner('Please wait...'):
-        ans = my_model.predict_on_texts(question, st.session_state.texts, num_results)
+    with st.spinner('Running...'):
+        ans = get_answers(question, st.session_state.texts, num_results)
     st.subheader("Answers")
     for answer in ans["answers"]:
         with st.expander(f"**Answer**: {answer.answer} - **Score**: {answer.score:.2f}"):
